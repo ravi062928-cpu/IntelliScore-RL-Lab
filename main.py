@@ -104,6 +104,28 @@ def init_db() -> None:
             raise
 
 
+def _normalize_experiment_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    item: dict[str, Any] = dict(row)
+    if "reward_history" in item and item["reward_history"] is not None:
+        if isinstance(item["reward_history"], str):
+            try:
+                item["reward_history"] = json.loads(item["reward_history"])
+            except (TypeError, json.JSONDecodeError):
+                pass
+    if "goal_row" in item and "goal_col" in item and "goal" not in item:
+        item["goal"] = [item["goal_row"], item["goal_col"]]
+    if "id" in item and "experiment_id" not in item:
+        item["experiment_id"] = item["id"]
+    if "steps_mean" in item and "mean_steps" not in item:
+        item["mean_steps"] = item["steps_mean"]
+    if "mean_steps" in item and "steps_mean" not in item:
+        item["steps_mean"] = item["mean_steps"]
+    if "steps_mean" in item and "mean_steps" in item:
+        if item["mean_steps"] is None and item["steps_mean"] is not None:
+            item["mean_steps"] = item["steps_mean"]
+    return item
+
+
 init_db()
 
 
@@ -258,6 +280,7 @@ def train_q_learning(req: QLearningRequest, user_id: str) -> dict[str, Any]:
         "mean_reward": round(float(np.mean(rewards)), 4),
         "success_rate": round(successes / req.episodes, 4),
         "mean_steps": round(float(np.mean(steps_per_episode)), 4),
+        "steps_mean": round(float(np.mean(steps_per_episode)), 4),
         "q_states_learned": len(q_table),
         "reward_history": [round(x, 4) for x in rewards],
         "seed": req.seed,
@@ -403,11 +426,7 @@ def list_experiments(limit: int = 20, user: dict[str, Any] = Depends(current_use
             (user["id"], limit),
         ).fetchall()
 
-    items = []
-    for row in rows:
-        item = dict(row)
-        item["reward_history"] = json.loads(item["reward_history"])
-        items.append(item)
+    items = [_normalize_experiment_row(row) for row in rows]
     return {"items": items, "count": len(items)}
 
 
@@ -428,8 +447,7 @@ def get_experiment(experiment_id: str, user: dict[str, Any] = Depends(current_us
     if row is None:
         raise HTTPException(status_code=404, detail="Experiment not found")
 
-    result = dict(row)
-    result["reward_history"] = json.loads(result["reward_history"])
+    result = _normalize_experiment_row(row)
     return result
 
 
@@ -547,6 +565,7 @@ def train_dqn(req: DQNRequest, user_id: str) -> dict[str, Any]:
         "mean_reward": round(float(np.mean(rewards)), 4),
         "success_rate": round(successes / req.episodes, 4),
         "mean_steps": round(float(np.mean(steps_history)), 4),
+        "steps_mean": round(float(np.mean(steps_history)), 4),
         "q_states_learned": state_count,
         "reward_history": [round(x, 4) for x in rewards],
         "seed": req.seed,
@@ -609,8 +628,7 @@ def _owned_experiments(user_id: str, experiment_ids: list[str]) -> list[dict[str
             ).fetchone()
             if row is None:
                 raise HTTPException(status_code=404, detail="Experiment not found")
-            item = dict(row)
-            item["reward_history"] = json.loads(item["reward_history"])
+            item = _normalize_experiment_row(row)
             items.append(item)
     if len(items) < 2:
         raise HTTPException(status_code=422, detail="Provide at least two distinct experiment IDs")
